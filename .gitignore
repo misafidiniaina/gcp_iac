@@ -1,16 +1,27 @@
-# Terraform files to ignore
+# Terraform working directories, state, variable values, and saved plans
+**/.terraform/*
 *.tfstate
-*.tfstate.backup
-.terraform/
-terraform.tfvars
-terraform.tfvars.json
+*.tfstate.*
 *.tfvars
+*.tfvars.json
+*.tfplan
+*.plan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
 
-# IDE files
+# Local credentials
+application_default_credentials.json
+*-credentials.json
+*.pem
+*.key
+
+# Editor and OS files
 .vscode/
 .idea/
-
-# OS files
 .DS_Store
-
-terraform.tfstate*
