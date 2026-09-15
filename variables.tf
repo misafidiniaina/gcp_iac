@@ -16,3 +16,8 @@ variable "zone" {
 }
 
 
+variable "deletion_protection" {
+  description = "Protect GKE from deletion; disable and apply before intentional teardown."
+  type        = bool
+  default     = true
+}

@@ -18,12 +18,13 @@ module "network" {
 }
 
 module "kubernetes" {
-  source          = "./modules/kubernetes"
-  cluster_count   = 1
-  project_id      = var.project_id
-  region          = var.region
-  network_name    = module.network.network_name
-  subnetwork_name = module.network.subnetwork_name
+  source              = "./modules/kubernetes"
+  cluster_count       = 1
+  deletion_protection = var.deletion_protection
+  project_id          = var.project_id
+  region              = var.region
+  network_name        = module.network.network_name
+  subnetwork_name     = module.network.subnetwork_name
 }
 
 module "service_account" {

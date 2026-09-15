@@ -16,5 +16,16 @@ variable "project_id" {
 
 
 variable "cluster_count" {
-  type = number
+  description = "Number of clusters; existing naming supports one primary and one test cluster."
+  type        = number
+  validation {
+    condition     = contains([1, 2], var.cluster_count)
+    error_message = "cluster_count must be 1 or 2."
+  }
+}
+
+variable "deletion_protection" {
+  description = "Protect clusters from accidental Terraform deletion."
+  type        = bool
+  default     = true
 }
