@@ -31,5 +31,5 @@ jobs:
         run: terraform validate -no-color
       - name: Validate optional VM module
         run: |
-          terraform -chdir=modules/virtual_machine init -backend=false -input=false
+          terraform -chdir=modules/virtual_machine init -backend=false -input=false -lockfile=readonly
           terraform -chdir=modules/virtual_machine validate -no-color
