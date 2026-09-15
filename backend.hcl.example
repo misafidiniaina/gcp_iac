@@ -1,0 +1,2 @@
+bucket = "YOUR_PROJECT_ID-terraform-state"
+prefix = "production/infrastructure"

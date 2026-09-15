@@ -1,0 +1,4 @@
+project_id    = "your-gcp-project-id"
+bucket_name   = "your-gcp-project-id-terraform-state"
+region        = "us-central1"
+state_members = ["user:operator@example.com"]
