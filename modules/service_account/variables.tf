@@ -1,13 +1,16 @@
 variable "project_id" {
-  type = string
+  description = "Google Cloud project ID."
+  type        = string
 }
 
 variable "service_account_id" {
-  type = string
+  description = "Service account ID, unique within the project."
+  type        = string
 }
 
 variable "service_account_description" {
-  type = string
+  description = "Display name for the automation identity."
+  type        = string
 }
 
 variable "service_account_roles" {

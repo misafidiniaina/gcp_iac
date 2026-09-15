@@ -1,19 +1,24 @@
 variable "network_name" {
-  type = string
+  description = "VPC network name."
+  type        = string
 }
 
 variable "subnetwork_name" {
-  type = string
+  description = "Regional subnetwork name."
+  type        = string
 }
 
 variable "region" {
-  type = string
+  description = "Google Cloud region."
+  type        = string
 }
 
 variable "zone" {
-  type = string
+  description = "Google Cloud zone."
+  type        = string
 }
 
 variable "project_id" {
-  type = string
+  description = "Google Cloud project ID."
+  type        = string
 }
