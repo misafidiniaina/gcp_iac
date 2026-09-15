@@ -42,3 +42,14 @@ resource "google_project_service" "artifact_registry_api" {
   service            = "artifactregistry.googleapis.com"
 }
 
+
+resource "google_project_service" "operations" {
+  for_each = toset([
+    "logging.googleapis.com",
+    "monitoring.googleapis.com",
+    "billingbudgets.googleapis.com",
+  ])
+  project            = var.project_id
+  service            = each.value
+  disable_on_destroy = false
+}

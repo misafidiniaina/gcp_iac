@@ -33,3 +33,24 @@ variable "deletion_protection" {
   type        = bool
   default     = true
 }
+
+variable "pods_range_name" {
+  description = "Existing subnet secondary range for Pods."
+  type        = string
+}
+
+variable "services_range_name" {
+  description = "Existing subnet secondary range for Services."
+  type        = string
+}
+
+variable "node_service_account_email" {
+  description = "Dedicated node identity with GKE node permissions."
+  type        = string
+}
+
+variable "security_group" {
+  description = "Optional Google Groups for RBAC parent group, gke-security-groups@your-domain."
+  type        = string
+  default     = null
+}

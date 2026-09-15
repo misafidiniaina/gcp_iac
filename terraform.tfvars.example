@@ -2,3 +2,14 @@ project_id          = "your-gcp-project-id"
 region              = "us-central1"
 zone                = "us-central1-a"
 deletion_protection = true
+
+# Set these to your actual billing account, currency, budget and monitored inbox.
+# 100 is an example alert threshold, not a cost estimate or spending limit.
+billing_account = "012345-ABCDEF-012345"
+monthly_budget  = 100
+budget_currency = "USD"
+alert_email     = "operations@example.com"
+
+cluster_operator_members = ["user:operator@example.com"]
+# For Google Groups RBAC, configure the parent group and its membership first.
+# security_group = "gke-security-groups@example.com"
