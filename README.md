@@ -1,56 +1,47 @@
 # Google Cloud Infrastructure with Terraform
 
-Deploy a **GKE Autopilot environment** with networking and a read-only service account in an existing Google Cloud project.
+A **single-region GKE Autopilot foundation for small production services**, with private nodes, shared Terraform state, keyless identities, an image registry, and operational alerts.
 
-**Use it for:** learning Google Cloud infrastructure, Kubernetes demos, and development environments. Applications are deployed separately; production use needs additional configuration.
+**Use it for:** hosting containerized APIs and web services while Google manages Kubernetes nodes. Application deployment and recovery testing are handled separately.
 
 ## At a glance
 
-| Specification | Default deployment |
+| Specification | Configuration |
 | --- | --- |
-| Kubernetes | 1 regional GKE Autopilot cluster |
-| Location | `us-central1` (configurable) |
-| Network | Custom VPC + subnet `10.0.0.0/24` |
-| Identity | Service account with Container Viewer; no keys generated |
-| Protection | Cluster deletion protection enabled |
+| Kubernetes | 1 regional Autopilot cluster; Regular release channel |
+| Location | `us-central1` (configurable); one project per environment |
+| Network | Private nodes; VPC + Pod/Service ranges; Cloud NAT |
+| Cluster access | IAM-authenticated DNS endpoint; private IP endpoint |
+| Identity | Dedicated node account; optional per-workload identities |
+| Images | Regional Docker registry; immutable tags |
+| Operations | Logs, metrics, restart alerts, monthly budget notifications |
+| State | Private, versioned GCS bucket with state locking |
 | Tooling | Terraform `>= 1.9, < 2.0`; Google provider `~> 6.12.0` |
 
 ## Module architecture
 
-Arrows show module dependencies: APIs are enabled first, then networking and identity; GKE uses the network outputs.
+Arrows show dependencies. `bootstrap` provisions state storage separately before the root modules run.
 
 ```mermaid
 flowchart LR
-    API["necessary_api<br/>Enable 6 Google Cloud APIs"] --> NET["network<br/>VPC, subnet, IAP SSH firewall"]
-    API --> SA["service_account<br/>Read-only identity + IAM role"]
-    NET --> GKE["kubernetes<br/>1 GKE Autopilot cluster"]
+    API["necessary_api<br/>Enable project APIs"] --> NET["network<br/>VPC, ranges, NAT, firewall"]
+    API --> SA["service_account<br/>Node + viewer identities"]
+    SA --> AR["artifact_registry<br/>Images + node pull access"]
+    NET --> GKE["kubernetes<br/>Private Autopilot nodes"]
+    SA --> GKE
+    AR --> GKE
+    GKE --> OPS["operations<br/>Restart alerts + budget"]
+    GKE --> WI["workload_identity (optional)<br/>Keyless application identities"]
 ```
 
-Module source: [necessary_api](modules/necessary_api/) · [network](modules/network/) · [service_account](modules/service_account/) · [kubernetes](modules/kubernetes/).
-
-**Optional:** [virtual_machine](modules/virtual_machine/) creates an Ubuntu 22.04 VM (`e2-medium`, 20 GB disk, public IP, OS Login). It is **not called by the root configuration**.
+Browse [modules](modules/) and [state bootstrap](bootstrap/). The standalone [virtual_machine](modules/virtual_machine/) module is optional, has a public IP, and is **not deployed by the root**.
 
 ## GitHub Actions
 
-The [Terraform validation workflow](.github/workflows/terraform.yml) runs on every push, pull request, or manual trigger using Terraform **1.9.8**:
-
-- Checks formatting across all modules (`terraform fmt`).
-- Initializes providers without a state backend and validates the root configuration and optional VM module (`terraform validate`).
-
-These checks catch formatting and configuration errors without cloud credentials. Deployment remains manual; CI does not run `plan` or `apply`.
+On every push, pull request, or manual trigger, the [workflow](.github/workflows/terraform.yml) checks formatting, validates the root, VM and bootstrap configurations, and runs mocked tests for production safeguards using Terraform **1.9.8**. CI needs no cloud credentials; deployment is manual.
 
 ## Deploy
 
-Requires a billed Google Cloud project, Google Cloud CLI authentication, and deployment permissions.
+Follow the **[deployment guide](docs/deployment.md)** to create the state bucket, configure your project, billing budget and alert recipient, then review and apply a plan.
 
-```bash
-cp terraform.tfvars.example terraform.tfvars
-# Set your project_id and preferred region/zone.
-terraform init
-terraform plan -out=deployment.tfplan
-terraform apply deployment.tfplan
-```
-
-Deployment creates billable resources. State is local by default. No applications or Artifact Registry repository are created.
-
-See the **[deployment guide](docs/deployment.md)** for authentication, permissions, inputs/outputs, cluster access, production limitations, migration notes, and cleanup.
+**Readiness:** configuration and mocked tests do not prove a live service is ready. Complete the [production verification steps](docs/production.md) for access, alerts, workload availability and recovery before serving users. Budget alerts are notifications, not spending caps; GKE, NAT, storage and telemetry incur charges.

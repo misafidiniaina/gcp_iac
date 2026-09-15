@@ -2,126 +2,126 @@
 
 [← Project overview](../README.md)
 
-## Engineering decisions
+## Prerequisites
 
-- **Explicit dependencies:** networking and IAM wait for API enablement; GKE depends on the network outputs.
-- **Custom-mode networking:** only the declared subnet is created. SSH ingress is limited to IAP's forwarding range and VMs tagged `vm-server`.
-- **Keyless identity:** no service account private keys are generated. The automation account receives `roles/container.viewer`; impersonation or federation trust must be configured separately.
-- **Lifecycle safeguards:** GKE deletion protection defaults to enabled. APIs stay enabled after Terraform destroy to avoid disrupting other project resources.
-- **Reproducibility:** the Google provider stays on the 6.12 patch line, with checksums tracked in the lock file. CI runs formatting and schema validation without cloud credentials.
+- Terraform `>= 1.9, < 2.0`, Google Cloud CLI, `kubectl`, and `gke-gcloud-auth-plugin`.
+- An existing billed Google Cloud project and sufficient regional quota. Use a separate project and state prefix for each environment; resource names are fixed.
+- An operator with permission to enable APIs, manage networks, GKE, service accounts/IAM, Artifact Registry, Monitoring and billing budgets. Budget management also requires access to the chosen billing account. Grant these to the deployment identity; the generated viewer identity cannot deploy infrastructure.
+- A monitored alert email address, billing account ID, budget amount, and currency matching that account.
 
-## Quick start
-
-### Prerequisites
-
-- Terraform 1.9 or newer, below 2.0 (CI uses 1.9.8).
-- Google Cloud CLI and an existing project with billing enabled and sufficient GKE quota.
-- A deployment identity permitted to enable services, manage networks and GKE, create service accounts, and manage project IAM. The created viewer identity is not the deployment identity.
-- For cluster access: `kubectl` and the `gke-gcloud-auth-plugin`.
-
-Authenticate and bootstrap Service Usage if it is not already enabled:
+Authenticate and bootstrap APIs needed before Terraform can manage infrastructure:
 
 ```bash
 gcloud auth login
 gcloud auth application-default login
 gcloud config set project YOUR_PROJECT_ID
-gcloud services enable serviceusage.googleapis.com --project YOUR_PROJECT_ID
+gcloud services enable serviceusage.googleapis.com storage.googleapis.com --project YOUR_PROJECT_ID
 gcloud auth application-default set-quota-project YOUR_PROJECT_ID
 ```
 
-Prepare your local configuration:
+## 1. Create shared state storage
+
+The independent [bootstrap configuration](../bootstrap/) creates a private, versioned regional bucket with seven-day soft deletion and deletion protection. Terraform's GCS backend provides state locking. State may contain sensitive information; restrict `state_members` to infrastructure operators.
 
 ```bash
+cp bootstrap/terraform.tfvars.example bootstrap/terraform.tfvars
+# Edit project_id, globally unique bucket_name, region and state_members.
+terraform -chdir=bootstrap init
+terraform -chdir=bootstrap plan -out=bootstrap.tfplan
+terraform -chdir=bootstrap apply bootstrap.tfplan
+```
+
+Bootstrap initially stores its own state locally. After bucket creation, create `bootstrap/backend.tf` containing `terraform { backend "gcs" {} }`, then migrate its state into the new bucket using a separate prefix:
+
+```bash
+terraform -chdir=bootstrap init -migrate-state \
+  -backend-config="bucket=YOUR_PROJECT_ID-terraform-state" \
+  -backend-config="prefix=bootstrap/state"
+```
+
+Preserve a restricted backup during migration and verify the remote state before removing local copies. The bucket must outlive the root infrastructure. Never use the same prefix for bootstrap and root.
+
+## 2. Configure and deploy the infrastructure
+
+```bash
+cp backend.hcl.example backend.hcl
 cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with your project ID and region.
-terraform init
+# Edit both files with your project, bucket, region, billing, budget and alert recipient.
+terraform init -backend-config=backend.hcl
 terraform fmt -check -recursive
 terraform validate
+terraform test
 terraform plan -out=deployment.tfplan
 terraform apply deployment.tfplan
 ```
 
-Review the plan before applying. Deployment creates billable cloud resources; CI never applies infrastructure.
+Review the saved plan before applying. The example budget of 100 is an example threshold, not a cost estimate. No cloud deployment was performed while preparing this configuration.
 
-Connect to the cluster (use the same region and project as your configuration):
+| Root input | Default / requirement |
+| --- | --- |
+| `project_id` | Required; existing Google Cloud project |
+| `region` / `zone` | `us-central1` / `us-central1-a`; root GKE is regional |
+| `billing_account` | Required billing account ID |
+| `monthly_budget` | Required positive whole number |
+| `budget_currency` | `USD`; must match billing account |
+| `alert_email` | Required monitored inbox |
+| `deletion_protection` | `true`; guards cluster deletion |
+| `cluster_operator_members` | Empty; add explicit IAM users/groups/service accounts |
+| `security_group` | Optional `gke-security-groups@your-domain` for Google Groups RBAC |
+| `workload_identities` | Empty map; configure per-application identities as needed |
+
+Outputs include cluster names, VPC name, viewer/node identities, managed APIs, the Docker repository URL, and workload identity emails.
+
+## 3. Connect and assign application access
+
+The public IP endpoint is disabled. The DNS endpoint accepts authenticated external clients, so operators do not need a VPN or bastion. This is IAM-controlled access, not a network-isolated DNS endpoint. Use the configured region:
 
 ```bash
 gcloud container clusters get-credentials kubernetescluster \
-  --region us-central1 \
-  --project YOUR_PROJECT_ID
-kubectl get namespaces
+  --dns-endpoint --region us-central1 --project YOUR_PROJECT_ID
 ```
 
-### Inputs
+`cluster_operator_members` receive Cluster Viewer for cluster discovery and connection. A cluster administrator must grant namespace-level Kubernetes RBAC for application operations. If using Google Groups, provision the required parent group and membership before setting `security_group`. See [production verification](production.md) for access checks.
 
-| Input | Default | Purpose |
-| --- | --- | --- |
-| `project_id` | Required | Existing Google Cloud project |
-| `region` | `us-central1` | Subnet and regional GKE location |
-| `zone` | `us-central1-a` | Provider default zone; no VM created by root |
-| `deletion_protection` | `true` | Prevent accidental cluster deletion |
+The dedicated node identity has `roles/container.defaultNodeServiceAccount` plus reader access to the managed image repository. It has no application data permissions. Autopilot enables Workload Identity Federation for GKE. To create an application identity:
 
-### Outputs
-
-| Output | Meaning |
-| --- | --- |
-| `cluster_names` | GKE cluster names |
-| `network_name` | VPC name |
-| `service_account_email` | Keyless automation identity |
-| `activate_api` | Managed API names; retained for compatibility |
-
-## Repository layout
-
-```text
-.github/workflows/terraform.yml  # Formatting and validation
-main.tf                         # Provider and module composition
-versions.tf                     # Terraform and provider constraints
-variables.tf / outputs.tf       # Root interface
-terraform.tfvars.example         # Safe starting configuration
-modules/
-  necessary_api/                # Project service enablement
-  network/                      # VPC, subnet, IAP SSH firewall
-  kubernetes/                   # Regional Autopilot clusters
-  service_account/              # Automation identity and IAM grants
-  virtual_machine/              # Optional standalone Ubuntu VM
+```hcl
+workload_identities = {
+  orders = {
+    account_id                 = "orders-app"
+    namespace                  = "orders"
+    kubernetes_service_account = "api"
+  }
+}
 ```
 
-## Operations and limitations
+Create the corresponding Kubernetes service account in your application manifests, annotate it with `iam.gke.io/gcp-service-account: orders-app@YOUR_PROJECT_ID.iam.gserviceaccount.com`, and set the Pod's `serviceAccountName: api`. Grant that Google identity only the permissions needed on specific secrets, buckets, or other resources. The module creates the exact impersonation binding; it intentionally grants no application data roles. GitHub Actions performs offline validation and needs no federation trust or deployment credentials.
 
-**State:** the default backend is local. State and saved plans can contain sensitive information and are ignored by Git. Before team use, configure a GCS backend with a separately provisioned bucket, restricted access, versioning, and an agreed recovery process. Commit the provider lock file; never commit credentials or state.
+## Operations
 
-**Access:** the firewall rule alone does not grant SSH access. Optional VM users also need IAP tunnel access and OS Login permissions. Use `gcloud compute ssh vm-server --tunnel-through-iap --zone YOUR_ZONE --project YOUR_PROJECT_ID`. No application ports are opened by this module.
+- **Networking:** node subnet `10.0.0.0/24`, Pods `10.4.0.0/14`, Services `10.8.0.0/20`. Review these against connected networks before deployment. The network module exposes these CIDRs for reuse; the root uses its defaults. NAT permits outbound internet access for the managed subnet, including its secondary ranges. It is not an outbound domain allowlist. VPC flow logs sample 10%; NAT logs errors only.
+- **Upgrades:** Regular release channel; daily maintenance window 00:00–08:00 UTC (56 hours weekly). Adjust the module to your service window before deployment. Applications must tolerate node maintenance.
+- **Images:** use unique immutable tags or image digests. Grant publisher access only to the release identity on this repository. No automatic image deletion policy is configured, preserving rollback images; review retention and storage costs.
+- **Alerts:** more than three container restarts in a five-minute interval triggers an email. Budget thresholds cover 50%, 80%, and 100% actual spend and 100% forecast spend for this project only. Verify recipient delivery after deployment. No traffic-based uptime/latency alert is possible until an application endpoint exists.
+- **Costs:** one region, no standalone VM or bastion. NAT, GKE workloads, registry/state storage, logs and metrics still cost money. Budget notifications are delayed and do not limit spending. Set application resource requests, replica limits and namespace quotas.
 
-**Production scope:** this is a portfolio foundation, not a complete production platform. It does not configure private GKE endpoints, explicit Pod/Service secondary ranges, a custom node service account, workload deployment, Kubernetes RBAC, federation trust, budgets, or alerting. Review these with your organization's policies before deployment. Resource names are fixed, so use separate projects for isolated environments or extend naming before deploying multiple copies into one project.
+## Existing deployments: migration required
 
-**Validation:** CI checks syntax and provider schemas for the root and optional VM module. It does not prove IAM permissions, quota availability, or successful deployment. Run a real plan in your target project before applying.
+Back up state and review an authenticated plan before any apply. To migrate existing root local state, use `terraform init -migrate-state -backend-config=backend.hcl`; do not initialize an empty remote state and apply over existing resources.
 
-### Existing deployments
+Private nodes, the dedicated node account and explicit secondary ranges can require cluster replacement. Deletion protection will block replacement until explicitly disabled and applied. For workloads already serving users, build a new cluster in a separate project, redeploy and restore data, test it, switch traffic, then retire the old cluster. A direct replacement can cause downtime.
 
-Review the plan carefully when upgrading from the initial version:
+New required inputs are billing account, monthly budget and alert email. New resources include NAT, registry, node identity, monitoring and budget. DNS access requires `--dns-endpoint`. Existing consumers of the older viewer account remain read-only.
 
-- The VPC changes from automatic to custom subnet mode; review existing auto-created subnets and workloads.
-- The existing firewall rule is narrowed to IAP SSH, removing direct internet access to SSH and application ports.
-- The managed service account key is removed and broad admin grants are replaced with Container Viewer. Migrate consumers to keyless authentication first. Historical state backups may still contain the old private key and require controlled retention.
-- GKE deletion protection is enabled; the old `kubernetes_sa_key` output is removed.
-- The optional VM uses an Ubuntu image family and no longer uploads a local SSH key. If you use it independently, review image-related replacement and OS Login access before applying.
+For upgrades from the original repository version: custom subnet mode and IAP-only SSH replaced broader network access; service account keys and admin grants were removed. Migrate old key consumers to keyless authentication and restrict historical state backups that may contain those keys.
 
-### Cleanup
+## Cleanup
 
-First set `deletion_protection = false` in `terraform.tfvars`, then apply that change before destroying:
-
-```bash
-terraform plan -out=teardown-prep.tfplan
-terraform apply teardown-prep.tfplan
-terraform plan -destroy -out=destroy.tfplan
-terraform apply destroy.tfplan
-```
-
-Review both plans. Project APIs intentionally remain enabled. Check for workload-created resources and storage that may require separate cleanup.
+For intentional cluster teardown, set `deletion_protection = false`, then review and apply that change before planning destruction. The registry has `prevent_destroy` and the state bucket is protected independently. A full destroy will be blocked while these guards remain; decide how to preserve images and state before explicitly changing their lifecycle protections. Do not delete backups as part of routine teardown. APIs remain enabled after resource destruction; workload-created storage or load balancers may need separate cleanup.
 
 ## References
 
-- [Google provider: custom VPC networks](https://registry.terraform.io/providers/hashicorp/google/6.12.0/docs/resources/compute_network)
-- [Google provider: project services](https://registry.terraform.io/providers/hashicorp/google/6.12.0/docs/resources/google_project_service)
-- [Google Cloud: IAP TCP forwarding](https://cloud.google.com/iap/docs/using-tcp-forwarding)
-- [Terraform: GCS backend](https://developer.hashicorp.com/terraform/language/backend/gcs)
+- [GKE Autopilot creation and node identity](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/creating-an-autopilot-cluster)
+- [GKE network isolation and DNS access](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/latest/network-isolation)
+- [GCS backend, locking and versioning](https://developer.hashicorp.com/terraform/language/backend/gcs)
+- [GKE Workload Identity Federation](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/workload-identity)
