@@ -33,3 +33,10 @@ jobs:
         run: |
           terraform -chdir=modules/virtual_machine init -backend=false -input=false -lockfile=readonly
           terraform -chdir=modules/virtual_machine validate -no-color
+      - name: Test production safeguards without cloud credentials
+        run: terraform test -no-color
+      - name: Validate and test state bootstrap
+        run: |
+          terraform -chdir=bootstrap init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=bootstrap validate -no-color
+          terraform -chdir=bootstrap test -no-color

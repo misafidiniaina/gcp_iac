@@ -25,3 +25,6 @@ application_default_credentials.json
 .vscode/
 .idea/
 .DS_Store
+
+# Local backend configuration
+backend.hcl
